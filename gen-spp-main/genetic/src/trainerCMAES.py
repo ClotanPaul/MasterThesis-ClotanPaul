@@ -1,3 +1,6 @@
+import cma
+import numpy as np
+from src.trainer import GeneticTrainer
 import gc
 import time
 from tqdm import tqdm
@@ -8,7 +11,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 import torch
-
+torch.set_float32_matmul_precision('high')
 from src.genetic.selection.selection_interface import SelectionInterface
 from src.genetic.crossover.crossover_interface import CrossoverInterface
 from src.genetic.mutation.mutation_interface import MutationInterface
@@ -18,59 +21,82 @@ from src.genetic.survival.survival_interface import SurvivalInterface
 from src.genetic.individual import Individual
 from src.model.highlight_extractor import HighlightExtractor
 
+class GeneticTrainerCMAES(GeneticTrainer):
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
 
-class GeneticTrainer:
+        # CMA-ES Parameters
+        self.cma_sigma = 0.5  # Initial mutation step size
+        # TO DO: MEMORY ALLOCATION FAIL.
+        self.cma_population_size = self.population_size  # Set CMA-ES population size
 
-    def __init__(self, n_generations: int, population_size: int, selection_rate: float, mutation_prob: float,
-                 selection_strategy: Type[SelectionInterface], crossover_strategy: Type[CrossoverInterface],
-                 mutation_strategy: MutationInterface, survival_strategy: Type[SurvivalInterface],
-                 model_params: dict, individual_params: dict, token_embedding_dim: int, max_len: int, run_eagerly: bool,
-                 train_generator_only: bool, stop_threshold: float = 0.05, refine: bool = True, workers: int = 1):
+        # Determine chromosome size
+        ### TO DO NEED TO DETERMINE HOW TO GET THIS DIMENSION CORRECTLY
+        self.chromosome_size = 873
 
-        assert 0.0 < selection_rate <= 1.0
-        assert 0.0 < mutation_prob <= 1.0
+        # Initialize CMA-ES optimizer
+        self.es = cma.CMAEvolutionStrategy(self.chromosome_size * [0], self.cma_sigma, {'popsize': self.cma_population_size})
 
-        self.n_generations = n_generations
-        self.population_size = population_size
-        self.selection_rate = selection_rate
-        self.mutation_prob = mutation_prob
-        self.stop_threshold = stop_threshold
-        self.refine = refine
-        self.train_generator_only = train_generator_only
-        self.workers = workers
 
-        self.selection_strategy = selection_strategy
-        self.crossover_strategy = crossover_strategy
-        self.mutation_strategy = mutation_strategy
-        self.survival_strategy = survival_strategy
+    ## TO MODIFY
+    def cmaes_fitness(self, individual):
+        """
+        Computes the fitness function for CMA-ES.
+        Args:
+            chromosome (np.ndarray): Candidate solution (chromosome).
+        Returns:
+            float: Fitness value (lower is better).
+        """
 
-        self.model_params = model_params
-        self.individual_params = individual_params
-        self.run_eagerly = run_eagerly
-        self.max_len = max_len
-        self.token_embedding_dim = token_embedding_dim
+        loss = 1.0 / individual.fitness 
 
-        self.population: list[Individual] = []
+        return loss  # CMA-ES minimizes
 
-        self.current_generation = 0
-        self.training_progress = []
 
-        self.max_population_size = population_size + 2 * int(selection_rate * population_size)
-        self.models_pool, self.initial_weights = self.__build_models_pool()
+    def __run_generation(self) -> None:
+        """
+        Runs one generation of evolution using CMA-ES instead of traditional genetic operations.
+        """
 
-    def initialize(self) -> None:
+        # Generate new candidate chromosomes from CMA-ES
+        print("Running CMA-ES optimization for mutation")
+        chromosomes = self.es.ask()  
 
-        self.population.clear()
 
-        for model in self.models_pool:
-            self.models_pool[model] = None
+        #Create indivituals with the new chromosomes.
+        print(f"Updating the individuals with the new chromosomes.")
+        for chromosome in chromosomes:
+            current_individual = self.__create_individual(chromosome=chromosome)
+            self.population.append(current_individual)
 
-        for _ in range(self.population_size):
-            individual = self.__create_individual()
-            self.population.append(individual)
+        #fitness_values = [self.cmaes_fitness(individual) for individual in self.population] #testing purposes
 
-        self.current_generation = 0
-        self.training_progress.clear()
+        if self.refine:
+            self.__apply_sgd_refinement()
+        print(f"Computing fitness values...")
+        fitness_values = [self.cmaes_fitness(individual) for individual in self.population]
+
+
+
+        self.population = self.survival_strategy.survival_select(self.population,
+                                                                self.population_size,
+                                                                workers=self.workers)
+        self.__remove_extra_individuals()
+
+        best_chromosomes = [ind.chromosome for ind in self.population]  
+
+        fitness_values = [self.cmaes_fitness(ind) for ind in self.population]
+        
+        #sorted_fitness_values = sorted(fitness_values)
+
+        #print("Sorted fitness values:", sorted_fitness_values)
+
+        # Update the CMA-ES optimizer with the top 50 chromosomes
+        assert len(best_chromosomes) == len(fitness_values), f"Mismatch: {len(best_chromosomes)} solutions but {len(fitness_values)} fitness values"
+        self.es.tell(best_chromosomes, fitness_values)
+
+
 
     def train(self, plot_results: bool = True) -> None:
 
@@ -97,7 +123,7 @@ class GeneticTrainer:
                 print("Generation {}/{} completed in {}s -> ".format(self.current_generation,
                                                                      self.n_generations,
                                                                      int(end_time - start_time)))
-                print("Lowest loss: {}".format(best_loss))
+                print("\n\nLowest loss: {}\n\n".format(best_loss))
                 print("Cross-Entropy: {} - Sparsity: {} - Confidence: {} - Contiguity: {}".format(best_individual.ce,
                                                                                                   best_individual.sparsity,
                                                                                                   best_individual.confidence,
@@ -112,57 +138,12 @@ class GeneticTrainer:
         if plot_results:
             self.plot_training_progress()
 
-    def plot_training_progress(self) -> None:
 
-        n_samples = len(self.training_progress)
 
-        if n_samples == 0:
-            raise Exception("train must be called before plotting")
 
-        x = np.arange(1, n_samples + 1)
-        y = np.array(self.training_progress)
 
-        plt.xlabel("Generations")
-        plt.ylabel("Score")
-        plt.ylim(0.0, 1.0)
-
-        plt.plot(x, y)
-        plt.show()
-
-    def get_metrics(self, x: tuple[np.ndarray, np.ndarray], true_labels: np.ndarray,
-                    true_masks: list[list[np.ndarray]]) -> dict[str, float]:
-
-        best_individual = self.get_best_individual()
-        return best_individual.compute_metrics(x, true_labels, true_masks)
-
-    def get_masks(self, x: tuple[np.ndarray, np.ndarray]) -> np.ndarray:
-
-        best_individual = self.get_best_individual()
-        return best_individual.compute_masks(x)
-
-    def get_labels(self, x: tuple[np.ndarray, np.ndarray]) -> np.ndarray:
-
-        best_individual = self.get_best_individual()
-        return best_individual.compute_labels(x)
-
-    def get_best_individual(self) -> Individual:
-
-        max_fitness_value = 0
-        best_individual = None
-
-        for individual in self.population:
-            if individual.fitness > max_fitness_value:
-                max_fitness_value = individual.fitness
-                best_individual = individual
-
-        return best_individual
-
-    def save_best_individual(self, name: str, path: str) -> None:
-
-        best_individual = self.get_best_individual()
-        best_model = best_individual.model
-
-        torch.save(best_model.state_dict(), path.format(name) + ".pt")
+#####################################################################################
+## TO DO: use the methods from the inherited class, and delete them from here.
 
     def __build_models_pool(self) -> tuple[dict[HighlightExtractor, Individual | None],
                                            dict[HighlightExtractor, dict]]:
@@ -186,7 +167,6 @@ class GeneticTrainer:
                 initial_weights[model] = model.classifier.state_dict()
             else:
                 initial_weights[model] = model.state_dict()
-
         return pool, initial_weights
 
     def __allocate_new_model(self) -> HighlightExtractor:
@@ -263,6 +243,7 @@ class GeneticTrainer:
     def __remove_extra_individuals(self) -> None:
 
         n_extra = self.max_population_size - self.population_size
+        print(f"The extra population is:")
 
         for _ in range(n_extra):
             individual = self.population[-1]
@@ -271,42 +252,8 @@ class GeneticTrainer:
                 raise Exception("No model for the individual")
             self.models_pool[model] = None
             del self.population[-1]
-
+        print(f"The actual length of the popution is: {len(self.population)}")
+        print(f"The population size param is: {self.population_size}")
         assert len(self.population) == self.population_size
 
         gc.collect()
-
-    def __run_generation(self) -> None:
-
-        # Selection
-        parents = self.selection_strategy.select(self.population, self.selection_rate, workers=self.workers)
-
-        for couple in tqdm(parents):
-
-            # Cross-over
-            parent_1 = couple[0]
-            parent_2 = couple[1]
-            child_chromosome_1, child_chromosome_2 = self.crossover_strategy.apply_crossover(parent_1, parent_2)
-
-            # Mutation
-            child_chromosome_1 = self.mutation_strategy.mutate(child_chromosome_1, self.mutation_prob)
-            child_chromosome_2 = self.mutation_strategy.mutate(child_chromosome_2, self.mutation_prob)
-            print(f"The size of the chromosome 1 is: {child_chromosome_1.shape}")
-            print(f"The size of the chromosome 2 is: {child_chromosome_2.shape}")
-
-            child_1 = self.__create_individual(chromosome=child_chromosome_1)
-            child_2 = self.__create_individual(chromosome=child_chromosome_2)
-
-            self.population.append(child_1)
-            self.population.append(child_2)
-
-        if self.refine:
-            self.__apply_sgd_refinement()
-
-        self.population = self.survival_strategy.survival_select(self.population,
-                                                                 self.population_size,
-                                                                 workers=self.workers)
-        #print("The length of the genome is:")
-        #print(len(self.population[0].chromosome))
-        
-        self.__remove_extra_individuals()

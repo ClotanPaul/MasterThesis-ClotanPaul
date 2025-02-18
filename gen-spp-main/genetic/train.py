@@ -5,6 +5,7 @@ import torch
 from torch.utils.data import DataLoader, TensorDataset
 
 from src.trainer import GeneticTrainer
+from src.trainerCMAES import GeneticTrainerCMAES
 from src.preprocessing.dataset_reader.dataset_reader_interface import DatasetReaderInterface
 from src.preprocessing.dataset_reader.toy_dataset_reader import ToyDatasetReader
 from src.preprocessing.dataset_reader.hatexplain_dataset_reader import HatexplainDatasetReader
@@ -92,13 +93,12 @@ def run_training(dataset_name: str, test_name: str, workers: int, run_count: int
     INDIVIDUAL_PARAMETERS["val_loader"] = val_loader
     INDIVIDUAL_PARAMETERS["original_val_masks"] = x_val[1]
     INDIVIDUAL_PARAMETERS["device"] = device
-
-    trainer = GeneticTrainer(N_GENERATIONS, POPULATION_SIZE, SELECTION_RATE, MUTATION_PROB, SELECTION_STRATEGY,
+    trainer = GeneticTrainerCMAES(N_GENERATIONS, POPULATION_SIZE, SELECTION_RATE, MUTATION_PROB, SELECTION_STRATEGY,
                              CROSSOVER_STRATEGY, MUTATION_STRATEGY, SURVIVAL_STRATEGY, MODEL_PARAMETERS,
                              INDIVIDUAL_PARAMETERS, dataset.embedding_dim, dataset.max_len,
                              RUN_EAGERLY, INDIVIDUAL_PARAMETERS["train_generator_only"],
                              STOP_THRESHOLD, REFINE_WITH_SGD, workers)
-
+    
     trainer.train(plot_results=plot_train_loss)
 
     trainer.save_best_individual(test_name.format(run_count), MODEL_SAVE_PATH)
