@@ -32,11 +32,25 @@ class GeneticTrainerCMAES(GeneticTrainer):
 
         # Determine chromosome size
         ### TO DO NEED TO DETERMINE HOW TO GET THIS DIMENSION CORRECTLY
-        self.chromosome_size = 873#2081
+        #self.chromosome_size = 873#2081
+
+        self.chromosome_size = self._infer_chromosome_size()
 
         # Initialize CMA-ES optimizer
         self.es = cma.CMAEvolutionStrategy(self.chromosome_size * [0], self.cma_sigma, {'popsize': self.cma_population_size})
 
+
+    def _infer_chromosome_size(self) -> int:
+        """
+        Builds a temporary individual to infer the length of the chromosome.
+        """
+        temp_model = HighlightExtractor(**self.model_params)
+        temp_individual = Individual(model=temp_model, **self.individual_params)
+        size = len(temp_individual.chromosome)
+        del temp_model
+        del temp_individual
+        gc.collect()
+        return size
 
     ## TO MODIFY
     def cmaes_fitness(self, individual):

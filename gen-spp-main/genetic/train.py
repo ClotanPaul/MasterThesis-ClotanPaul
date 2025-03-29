@@ -13,7 +13,10 @@ from src.preprocessing.dataset_reader.hatexplain_dataset_reader import Hatexplai
 from src.utils.saving import save_to_txt, save_metrics
 from src.utils.config import *
 from src.utils.metrics import StatisticalMetrics
-
+import requests
+from tqdm import tqdm
+import os
+import zipfile
 
 def set_random_seed(seed: int) -> None:
 
@@ -21,6 +24,46 @@ def set_random_seed(seed: int) -> None:
     np.random.seed(seed)
     torch.manual_seed(seed)
 
+def download_glove_twitter():
+    # Get absolute path to the current file (train.py)
+    repo_root = os.path.dirname(os.path.abspath(__file__))
+    
+    # Build the target directory path relative to this file
+    target_dir = os.path.join(repo_root, "data", "glove", "twitter")
+    zip_path = os.path.join(repo_root, "glove.twitter.27B.zip")
+    download_url = "https://nlp.stanford.edu/data/glove.twitter.27B.zip"
+
+    # Skip download if target folder exists and is not empty
+    if os.path.isdir(target_dir) and any(f.endswith(".txt") for f in os.listdir(target_dir)):
+        print("GloVe Twitter embeddings already present.")
+        return
+
+    print("Downloading GloVe Twitter embeddings...")
+
+    # Stream download with progress bar
+    response = requests.get(download_url, stream=True)
+    total_size = int(response.headers.get("content-length", 0))
+    block_size = 1024
+    with open(zip_path, "wb") as f, tqdm(
+        desc="Downloading",
+        total=total_size,
+        unit="B",
+        unit_scale=True,
+        unit_divisor=1024,
+    ) as bar:
+        for chunk in response.iter_content(chunk_size=block_size):
+            if chunk:
+                f.write(chunk)
+                bar.update(len(chunk))
+
+    # Extract to the correct directory
+    os.makedirs(target_dir, exist_ok=True)
+    with zipfile.ZipFile(zip_path, "r") as zip_ref:
+        print(f"The target dir is: {target_dir}")
+        zip_ref.extractall(target_dir)
+
+    os.remove(zip_path)
+    print(f"GloVe Twitter embeddings downloaded to: {target_dir}")
 
 def parse_arguments():
 
@@ -32,7 +75,7 @@ def parse_arguments():
     parser.add_argument('--n', type=int, help='Number of complete training runs for statistics', default=5)
     parser.add_argument("--w", type=int, help="Number of workers to train in parallel." + warning, default=1)
     parser.add_argument("--cpu", action='store_true', help="Whether to run on CPU or GPU (if available)")
-
+    parser.add_argument('--cmaes', action=argparse.BooleanOptionalAction, help= "Flag to switch the GA algorithm to CMAES")
     _args = parser.parse_args()
 
     return _args
@@ -55,6 +98,8 @@ def run_training(dataset_name: str, test_name: str, workers: int, run_count: int
         INDIVIDUAL_PARAMETERS["ce_expected_loss"] = TOY_CE_EXPECTED_LOSS
 
     else:
+        download_glove_twitter() #download the twitter package.
+
         dataset_reader: DatasetReaderInterface = HatexplainDatasetReader(GLOVE_TWITTER_PATH,
                                                                          HATE_EXPLAIN_TOKEN_EMBEDDING_DIM,
                                                                          HATE_EXPLAIN_FILTER_MAX_LEN)
@@ -93,19 +138,21 @@ def run_training(dataset_name: str, test_name: str, workers: int, run_count: int
     INDIVIDUAL_PARAMETERS["val_loader"] = val_loader
     INDIVIDUAL_PARAMETERS["original_val_masks"] = x_val[1]
     INDIVIDUAL_PARAMETERS["device"] = device
+    if args.cmaes:
+        print(f"Running CMAES")
+        trainer = GeneticTrainerCMAES(N_GENERATIONS, POPULATION_SIZE, SELECTION_RATE, MUTATION_PROB, SELECTION_STRATEGY,
+                             CROSSOVER_STRATEGY, MUTATION_STRATEGY, SURVIVAL_STRATEGY, MODEL_PARAMETERS,
+                             INDIVIDUAL_PARAMETERS, dataset.embedding_dim, dataset.max_len,
+                             RUN_EAGERLY, INDIVIDUAL_PARAMETERS["train_generator_only"],
+                             STOP_THRESHOLD, REFINE_WITH_SGD, workers)
+    else:
+        print(f"Running the classical GA")
+        trainer = GeneticTrainer(N_GENERATIONS, POPULATION_SIZE, SELECTION_RATE, MUTATION_PROB, SELECTION_STRATEGY,
+                                CROSSOVER_STRATEGY, MUTATION_STRATEGY, SURVIVAL_STRATEGY, MODEL_PARAMETERS,
+                                INDIVIDUAL_PARAMETERS, dataset.embedding_dim, dataset.max_len,
+                                RUN_EAGERLY, INDIVIDUAL_PARAMETERS["train_generator_only"],
+                                STOP_THRESHOLD, REFINE_WITH_SGD, workers)
     
-    trainer = GeneticTrainerCMAES(N_GENERATIONS, POPULATION_SIZE, SELECTION_RATE, MUTATION_PROB, SELECTION_STRATEGY,
-                             CROSSOVER_STRATEGY, MUTATION_STRATEGY, SURVIVAL_STRATEGY, MODEL_PARAMETERS,
-                             INDIVIDUAL_PARAMETERS, dataset.embedding_dim, dataset.max_len,
-                             RUN_EAGERLY, INDIVIDUAL_PARAMETERS["train_generator_only"],
-                             STOP_THRESHOLD, REFINE_WITH_SGD, workers)
-    """
-    trainer = GeneticTrainer(N_GENERATIONS, POPULATION_SIZE, SELECTION_RATE, MUTATION_PROB, SELECTION_STRATEGY,
-                             CROSSOVER_STRATEGY, MUTATION_STRATEGY, SURVIVAL_STRATEGY, MODEL_PARAMETERS,
-                             INDIVIDUAL_PARAMETERS, dataset.embedding_dim, dataset.max_len,
-                             RUN_EAGERLY, INDIVIDUAL_PARAMETERS["train_generator_only"],
-                             STOP_THRESHOLD, REFINE_WITH_SGD, workers)
-    """
     trainer.train(plot_results=plot_train_loss)
 
     trainer.save_best_individual(test_name.format(run_count), MODEL_SAVE_PATH)
