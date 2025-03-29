@@ -11,7 +11,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 import torch
-torch.set_float32_matmul_precision('high')
 from src.genetic.selection.selection_interface import SelectionInterface
 from src.genetic.crossover.crossover_interface import CrossoverInterface
 from src.genetic.mutation.mutation_interface import MutationInterface
@@ -33,7 +32,7 @@ class GeneticTrainerCMAES(GeneticTrainer):
 
         # Determine chromosome size
         ### TO DO NEED TO DETERMINE HOW TO GET THIS DIMENSION CORRECTLY
-        self.chromosome_size = 873
+        self.chromosome_size = 873#2081
 
         # Initialize CMA-ES optimizer
         self.es = cma.CMAEvolutionStrategy(self.chromosome_size * [0], self.cma_sigma, {'popsize': self.cma_population_size})

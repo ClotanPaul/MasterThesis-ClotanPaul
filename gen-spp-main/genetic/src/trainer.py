@@ -291,8 +291,8 @@ class GeneticTrainer:
             # Mutation
             child_chromosome_1 = self.mutation_strategy.mutate(child_chromosome_1, self.mutation_prob)
             child_chromosome_2 = self.mutation_strategy.mutate(child_chromosome_2, self.mutation_prob)
-            print(f"The size of the chromosome 1 is: {child_chromosome_1.shape}")
-            print(f"The size of the chromosome 2 is: {child_chromosome_2.shape}")
+            #print(f"The size of the chromosome 1 is: {child_chromosome_1.shape}")
+            #print(f"The size of the chromosome 2 is: {child_chromosome_2.shape}")
 
             child_1 = self.__create_individual(chromosome=child_chromosome_1)
             child_2 = self.__create_individual(chromosome=child_chromosome_2)
