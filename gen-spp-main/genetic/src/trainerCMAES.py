@@ -41,16 +41,14 @@ class GeneticTrainerCMAES(GeneticTrainer):
 
 
     def _infer_chromosome_size(self) -> int:
-        """
-        Builds a temporary individual to infer the length of the chromosome.
-        """
         temp_model = HighlightExtractor(**self.model_params)
-        temp_individual = Individual(model=temp_model, **self.individual_params)
+        self.individual_params["model"] = temp_model
+        temp_individual = Individual(**self.individual_params)
         size = len(temp_individual.chromosome)
-        del temp_model
-        del temp_individual
+        del temp_model, temp_individual
         gc.collect()
         return size
+
 
     ## TO MODIFY
     def cmaes_fitness(self, individual):
